@@ -792,4 +792,550 @@ def create_wordcloud_by_class(
     n_cols = min(3, n_classes)
     n_rows = (n_classes + n_cols - 1) // n_cols  # Ceiling division
     
-    fig, axes = plt.subplots(n_rows, n_cols, figsize=
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=figsize)
+    
+    # Ensure axes is a 2D array for consistent indexing
+    if n_rows == 1 and n_cols == 1:
+        axes = np.array([[axes]])
+    elif n_rows == 1:
+        axes = np.array([axes])
+    elif n_cols == 1:
+        axes = np.array([[ax] for ax in axes])
+    
+    # Create word cloud for each class
+    for i, (class_name, texts) in enumerate(texts_by_class.items()):
+        row = i // n_cols
+        col = i % n_cols
+        
+        # Combine all texts for this class
+        text = ' '.join(texts)
+        
+        # Create word cloud
+        wordcloud = WordCloud(
+            background_color='white',
+            max_words=max_words,
+            colormap='viridis',
+            stopwords=stopwords,
+            random_state=42
+        ).generate(text)
+        
+        # Plot word cloud
+        axes[row, col].imshow(wordcloud, interpolation='bilinear')
+        axes[row, col].set_title(f'Class: {class_name}')
+        axes[row, col].axis('off')
+    
+    # Hide empty subplots
+    for i in range(len(texts_by_class), n_rows * n_cols):
+        row = i // n_cols
+        col = i % n_cols
+        axes[row, col].axis('off')
+    
+    plt.suptitle(title, fontsize=16)
+    plt.tight_layout(rect=[0, 0, 1, 0.96])  # Adjust for the suptitle
+    
+    # Save figure if save_path is provided
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    
+    return fig
+
+
+def create_interactive_results_dashboard(
+    model_metrics: Dict[str, Dict[str, Any]],
+    class_names: List[str],
+    save_path: Optional[str] = None
+) -> go.Figure:
+    """
+    Create an interactive dashboard with model results using Plotly.
+    
+    Args:
+        model_metrics: Dictionary mapping model names to metrics dictionaries
+        class_names: List of class names
+        save_path: Path to save the HTML dashboard
+        
+    Returns:
+        Plotly Figure object for the dashboard
+    """
+    # Create a multi-tab dashboard
+    fig = make_subplots(
+        rows=2, cols=2,
+        subplot_titles=("Model Comparison", "Per-Class Metrics", "Confusion Matrix", "Inference Time"),
+        specs=[[{"type": "bar"}, {"type": "bar"}],
+               [{"type": "heatmap"}, {"type": "bar"}]]
+    )
+    
+    # Extract data for the plots
+    model_names = list(model_metrics.keys())
+    
+    # 1. Overall metrics comparison
+    metrics = ['accuracy', 'precision', 'recall', 'f1_score']
+    for i, metric in enumerate(metrics):
+        values = [metrics_dict.get(metric, 0) for metrics_dict in model_metrics.values()]
+        fig.add_trace(
+            go.Bar(
+                x=model_names,
+                y=values,
+                name=metric,
+                text=[f"{v:.3f}" for v in values],
+                textposition='auto'
+            ),
+            row=1, col=1
+        )
+    
+    # 2. Per-class metrics (for the first model)
+    if model_names and 'classification_report' in model_metrics[model_names[0]]:
+        report = model_metrics[model_names[0]]['classification_report']
+        for i, class_name in enumerate(class_names):
+            if class_name in report:
+                class_metrics = report[class_name]
+                fig.add_trace(
+                    go.Bar(
+                        x=['precision', 'recall', 'f1-score'],
+                        y=[class_metrics['precision'], class_metrics['recall'], class_metrics['f1-score']],
+                        name=class_name,
+                        text=[f"{class_metrics['precision']:.3f}", f"{class_metrics['recall']:.3f}", f"{class_metrics['f1-score']:.3f}"],
+                        textposition='auto'
+                    ),
+                    row=1, col=2
+                )
+    
+    # 3. Confusion matrix (for the first model)
+    if model_names and 'confusion_matrix' in model_metrics[model_names[0]]:
+        cm = model_metrics[model_names[0]]['confusion_matrix']
+        fig.add_trace(
+            go.Heatmap(
+                z=cm,
+                x=class_names,
+                y=class_names,
+                colorscale='Blues',
+                showscale=True,
+                text=[[str(int(y)) for y in x] for x in cm],
+                texttemplate="%{text}"
+            ),
+            row=2, col=1
+        )
+    
+    # 4. Inference time comparison
+    inference_times = [metrics_dict.get('inference_time_per_sample', 0) * 1000 for metrics_dict in model_metrics.values()]
+    fig.add_trace(
+        go.Bar(
+            x=model_names,
+            y=inference_times,
+            name='Inference Time',
+            text=[f"{t:.2f} ms" for t in inference_times],
+            textposition='auto'
+        ),
+        row=2, col=2
+    )
+    
+    # Update layout
+    fig.update_layout(
+        title_text="Model Evaluation Dashboard",
+        showlegend=True,
+        height=800,
+        width=1200,
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1
+        )
+    )
+    
+    # Update axes labels
+    fig.update_xaxes(title_text="Model", row=1, col=1)
+    fig.update_yaxes(title_text="Score", row=1, col=1)
+    
+    fig.update_xaxes(title_text="Metric", row=1, col=2)
+    fig.update_yaxes(title_text="Score", row=1, col=2)
+    
+    fig.update_xaxes(title_text="Predicted", row=2, col=1)
+    fig.update_yaxes(title_text="True", row=2, col=1)
+    
+    fig.update_xaxes(title_text="Model", row=2, col=2)
+    fig.update_yaxes(title_text="Time (ms)", row=2, col=2)
+    
+    # Save dashboard if save_path is provided
+    if save_path:
+        fig.write_html(save_path)
+    
+    return fig
+
+
+def create_text_length_distribution_plot(
+    texts: List[str],
+    labels: List[int],
+    class_names: List[str],
+    title: str = "Text Length Distribution by Class",
+    save_path: Optional[str] = None,
+    figsize: Tuple[int, int] = (12, 6)
+) -> plt.Figure:
+    """
+    Create a plot showing the distribution of text lengths by class.
+    
+    Args:
+        texts: List of text samples
+        labels: List of class labels
+        class_names: List of class names
+        title: Plot title
+        save_path: Path to save the figure
+        figsize: Figure size as (width, height) in inches
+        
+    Returns:
+        Matplotlib Figure object
+    """
+    # Calculate text lengths
+    text_lengths = [len(text) for text in texts]
+    
+    # Create DataFrame
+    df = pd.DataFrame({
+        'length': text_lengths,
+        'label': labels,
+        'class': [class_names[label] for label in labels]
+    })
+    
+    # Create figure
+    fig, ax = plt.subplots(figsize=figsize)
+    
+    # Create violin plot
+    sns.violinplot(x='class', y='length', data=df, ax=ax)
+    
+    # Add box plot for more detail
+    sns.boxplot(x='class', y='length', data=df, width=0.15, 
+                color='white', ax=ax, showfliers=False)
+    
+    # Customize plot
+    ax.set_xlabel('Class')
+    ax.set_ylabel('Text Length (characters)')
+    ax.set_title(title)
+    
+    # Add descriptive statistics
+    stats = df.groupby('class')['length'].agg(['mean', 'median', 'min', 'max']).round(1)
+    
+    # Add text box with statistics
+    textstr = '\n'.join([
+        f"{class_name}:",
+        f"  Mean: {stats.loc[class_name, 'mean']}",
+        f"  Median: {stats.loc[class_name, 'median']}",
+        f"  Range: [{stats.loc[class_name, 'min']}, {stats.loc[class_name, 'max']}]"
+    ] for class_name in class_names)
+    
+    props = dict(boxstyle='round', facecolor='white', alpha=0.5)
+    ax.text(0.05, 0.95, textstr, transform=ax.transAxes, fontsize=10,
+            verticalalignment='top', bbox=props)
+    
+    plt.tight_layout()
+    
+    # Save figure if save_path is provided
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    
+    return fig
+
+
+def create_feature_importance_plot(
+    feature_names: List[str],
+    importances: List[float],
+    title: str = "Feature Importance",
+    top_n: int = 20,
+    save_path: Optional[str] = None,
+    figsize: Tuple[int, int] = (12, 8)
+) -> plt.Figure:
+    """
+    Create a horizontal bar plot showing feature importances.
+    
+    Args:
+        feature_names: List of feature names
+        importances: List of importance scores
+        title: Plot title
+        top_n: Number of top features to show
+        save_path: Path to save the figure
+        figsize: Figure size as (width, height) in inches
+        
+    Returns:
+        Matplotlib Figure object
+    """
+    # Create DataFrame
+    df = pd.DataFrame({
+        'feature': feature_names,
+        'importance': importances
+    })
+    
+    # Sort by importance and take top N
+    df = df.sort_values('importance', ascending=False).head(top_n)
+    
+    # Create figure
+    fig, ax = plt.subplots(figsize=figsize)
+    
+    # Create horizontal bar chart
+    bars = ax.barh(df['feature'], df['importance'], color='skyblue')
+    
+    # Add value labels
+    for i, bar in enumerate(bars):
+        width = bar.get_width()
+        ax.text(width + max(df['importance'])*0.01, bar.get_y() + bar.get_height()/2,
+                f'{width:.4f}', va='center')
+    
+    # Customize plot
+    ax.set_xlabel('Importance')
+    ax.set_ylabel('Feature')
+    ax.set_title(title)
+    
+    # Invert y-axis to show most important at the top
+    ax.invert_yaxis()
+    
+    plt.tight_layout()
+    
+    # Save figure if save_path is provided
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    
+    return fig
+
+
+def create_metrics_over_time_plot(
+    timestamps: List[str],
+    metrics_over_time: Dict[str, List[float]],
+    models: List[str],
+    metric_name: str = 'accuracy',
+    title: Optional[str] = None,
+    save_path: Optional[str] = None,
+    figsize: Tuple[int, int] = (12, 6)
+) -> plt.Figure:
+    """
+    Create a line plot showing metrics over time for multiple models.
+    
+    Args:
+        timestamps: List of timestamp strings
+        metrics_over_time: Dictionary mapping model names to lists of metric values
+        models: List of model names to include in the plot
+        metric_name: Name of the metric being plotted
+        title: Plot title (defaults to f"{metric_name.title()} Over Time")
+        save_path: Path to save the figure
+        figsize: Figure size as (width, height) in inches
+        
+    Returns:
+        Matplotlib Figure object
+    """
+    if title is None:
+        title = f"{metric_name.title()} Over Time"
+    
+    # Create figure
+    fig, ax = plt.subplots(figsize=figsize)
+    
+    # Plot each model
+    for i, model in enumerate(models):
+        if model in metrics_over_time:
+            values = metrics_over_time[model]
+            if len(values) == len(timestamps):
+                ax.plot(timestamps, values, 'o-', label=model,
+                       color=MODEL_COLORS[i % len(MODEL_COLORS)])
+    
+    # Customize plot
+    ax.set_xlabel('Time')
+    ax.set_ylabel(metric_name.title())
+    ax.set_title(title)
+    ax.legend()
+    
+    # Rotate x-axis labels for better readability
+    plt.xticks(rotation=45)
+    
+    plt.tight_layout()
+    
+    # Save figure if save_path is provided
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    
+    return fig
+
+
+def create_visualization_report(
+    model_metrics: Dict[str, Dict[str, Any]],
+    texts: List[str],
+    true_labels: List[int],
+    pred_labels: Dict[str, List[int]],
+    confidences: Dict[str, List[float]],
+    class_names: List[str],
+    output_dir: str,
+    embeddings: Optional[np.ndarray] = None
+) -> None:
+    """
+    Create a comprehensive visualization report for model evaluation.
+    
+    Args:
+        model_metrics: Dictionary mapping model names to metrics dictionaries
+        texts: List of text samples
+        true_labels: List of true labels
+        pred_labels: Dictionary mapping model names to lists of predicted labels
+        confidences: Dictionary mapping model names to lists of prediction confidences
+        class_names: List of class names
+        output_dir: Directory to save visualizations
+        embeddings: Optional array of text embeddings for t-SNE visualization
+    """
+    # Create output directory
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # 1. Class distribution
+    create_distribution_plot(
+        labels=true_labels,
+        class_names=class_names,
+        title="Class Distribution in Dataset",
+        save_path=os.path.join(output_dir, "class_distribution.png")
+    )
+    
+    # 2. Text length distribution
+    create_text_length_distribution_plot(
+        texts=texts,
+        labels=true_labels,
+        class_names=class_names,
+        save_path=os.path.join(output_dir, "text_length_distribution.png")
+    )
+    
+    # 3. Model comparison
+    create_model_comparison_plot(
+        model_metrics=model_metrics,
+        save_path=os.path.join(output_dir, "model_comparison.png")
+    )
+    
+    # 4. Radar chart
+    create_radar_chart(
+        model_metrics=model_metrics,
+        save_path=os.path.join(output_dir, "radar_chart.png")
+    )
+    
+    # 5. Inference time comparison
+    inference_times = {
+        model: metrics.get('inference_time_per_sample', 0) * 1000
+        for model, metrics in model_metrics.items()
+    }
+    create_inference_time_plot(
+        model_times=inference_times,
+        save_path=os.path.join(output_dir, "inference_time.png")
+    )
+    
+    # 6. Confusion matrices for each model
+    for model_name, labels in pred_labels.items():
+        create_confusion_matrix_plot(
+            y_true=true_labels,
+            y_pred=labels,
+            class_names=class_names,
+            title=f"Confusion Matrix - {model_name}",
+            save_path=os.path.join(output_dir, f"{model_name}_confusion_matrix.png")
+        )
+    
+    # 7. Error analysis for each model
+    for model_name, labels in pred_labels.items():
+        if model_name in confidences:
+            create_error_analysis_plot(
+                texts=texts,
+                true_labels=true_labels,
+                pred_labels=labels,
+                confidences=confidences[model_name],
+                class_names=class_names,
+                title=f"Error Analysis - {model_name}",
+                save_path=os.path.join(output_dir, f"{model_name}_error_analysis.png")
+            )
+    
+    # 8. t-SNE visualization if embeddings are provided
+    if embeddings is not None:
+        create_tsne_plot(
+            embeddings=embeddings,
+            labels=true_labels,
+            class_names=class_names,
+            save_path=os.path.join(output_dir, "tsne_visualization.png")
+        )
+        
+        # Interactive version
+        create_tsne_plot(
+            embeddings=embeddings,
+            labels=true_labels,
+            class_names=class_names,
+            interactive=True,
+            save_path=os.path.join(output_dir, "tsne_visualization_interactive.html")
+        )
+    
+    # 9. Interactive dashboard
+    create_interactive_results_dashboard(
+        model_metrics=model_metrics,
+        class_names=class_names,
+        save_path=os.path.join(output_dir, "results_dashboard.html")
+    )
+    
+    print(f"Visualization report created in {output_dir}")
+
+
+if __name__ == "__main__":
+    # Example usage
+    
+    # Sample data (replace with your actual data)
+    texts = [
+        "I love this product, it's amazing!",
+        "This movie was terrible and boring.",
+        "The service was okay, nothing special.",
+        "I'm very disappointed with the quality.",
+        "This is the best purchase I've ever made!"
+    ]
+    
+    # Labels: 0 = negative, 1 = neutral, 2 = positive
+    true_labels = [2, 0, 1, 0, 2]
+    class_names = ["Negative", "Neutral", "Positive"]
+    
+    # Sample model predictions
+    pred_labels = {
+        "BERT": [2, 0, 1, 0, 2],  # Perfect predictions
+        "RoBERTa": [2, 0, 2, 0, 2]  # One error
+    }
+    
+    # Sample confidences
+    confidences = {
+        "BERT": [0.95, 0.87, 0.75, 0.92, 0.98],
+        "RoBERTa": [0.97, 0.82, 0.68, 0.94, 0.99]
+    }
+    
+    # Sample metrics
+    model_metrics = {
+        "BERT": {
+            "accuracy": 1.0,
+            "precision": 1.0,
+            "recall": 1.0,
+            "f1_score": 1.0,
+            "inference_time_per_sample": 0.015,  # seconds
+            "confusion_matrix": confusion_matrix(true_labels, pred_labels["BERT"])
+        },
+        "RoBERTa": {
+            "accuracy": 0.8,
+            "precision": 0.833,
+            "recall": 0.833,
+            "f1_score": 0.833,
+            "inference_time_per_sample": 0.012,  # seconds
+            "confusion_matrix": confusion_matrix(true_labels, pred_labels["RoBERTa"])
+        }
+    }
+    
+    # Create sample visualizations
+    os.makedirs("example_visualizations", exist_ok=True)
+    
+    # Class distribution
+    create_distribution_plot(
+        labels=true_labels,
+        class_names=class_names,
+        save_path="example_visualizations/class_distribution.png"
+    )
+    
+    # Model comparison
+    create_model_comparison_plot(
+        model_metrics=model_metrics,
+        save_path="example_visualizations/model_comparison.png"
+    )
+    
+    # Confusion matrix
+    create_confusion_matrix_plot(
+        y_true=true_labels,
+        y_pred=pred_labels["RoBERTa"],
+        class_names=class_names,
+        title="Confusion Matrix - RoBERTa",
+        save_path="example_visualizations/roberta_confusion_matrix.png"
+    )
+    
+    print("Example visualizations created in 'example_visualizations' directory")
