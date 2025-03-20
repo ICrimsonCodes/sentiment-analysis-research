@@ -1,238 +1,290 @@
-# data_preprocessing.py - Text preprocessing utilities for sentiment analysis
+"""
+Data preprocessing script for sentiment analysis research.
+This script processes the Stanford Sentiment Treebank and Reddit datasets.
+"""
 
-# This module provides functions to preprocess text data for sentiment analysis, 
-# with specific handling for social media text features like hashtags, mentions,
-# emojis, and other special characters.
-
-
+import os
+import pandas as pd
+import numpy as np
 import re
-import emoji
-import string
 import nltk
-from nltk.tokenize import word_tokenize
 from nltk.corpus import stopwords
-from nltk.stem import WordNetLemmatizer
+from nltk.tokenize import word_tokenize
+from sklearn.model_selection import train_test_split
+import logging
+from pathlib import Path
+import json
 
-# Download required NLTK resources
-try:
-    nltk.data.find('tokenizers/punkt')
-    nltk.data.find('corpora/stopwords')
-    nltk.data.find('corpora/wordnet')
-except LookupError:
-    nltk.download('punkt')
-    nltk.download('stopwords')
-    nltk.download('wordnet')
+# Set up logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
-class TextPreprocessor:
-    #Text preprocessing class for sentiment analysis tasks.
+# Define paths
+ROOT_DIR = Path(__file__).parent.parent
+RAW_DATA_DIR = ROOT_DIR / "data" / "raw"
+PROCESSED_DATA_DIR = ROOT_DIR / "data" / "processed"
+SST_FILE = RAW_DATA_DIR / "stanford_sentiment_treebank.csv"
+REDDIT_FILE = RAW_DATA_DIR / "reddit_data.csv"
+
+# Ensure directories exist
+PROCESSED_DATA_DIR.mkdir(exist_ok=True, parents=True)
+
+
+def download_nltk_resources():
+    """Download required NLTK resources if not present."""
+    try:
+        nltk.data.find('tokenizers/punkt')
+    except LookupError:
+        nltk.download('punkt')
     
-    def __init__(self, 
-                 remove_urls=True,
-                 remove_mentions=False,
-                 process_hashtags=True,
-                 process_emojis=True,
-                 remove_punctuation=True,
-                 convert_lowercase=True,
-                 remove_stopwords=False,
-                 lemmatize=False,
-                 language='english'):
-       
-# Initialize the text preprocessor with configurable options.
-    #Args:
-      #remove_urls (bool): Whether to remove URLs from text
-      # remove_mentions (bool): Whether to remove @mentions completely
-      # process_hashtags (bool): Whether to process #hashtags (remove # and keep text)
-      # process_emojis (bool): Whether to replace emojis with their text description
-      # remove_punctuation (bool): Whether to remove punctuation
-      # convert_lowercase (bool): Whether to convert text to lowercase
-      # remove_stopwords (bool): Whether to remove stopwords
-      # lemmatize (bool): Whether to perform lemmatization
-      # language (str): Language for stopwords (default: 'english')
+    try:
+        nltk.data.find('corpora/stopwords')
+    except LookupError:
+        nltk.download('stopwords')
 
-        self.remove_urls = remove_urls
-        self.remove_mentions = remove_mentions
-        self.process_hashtags = process_hashtags
-        self.process_emojis = process_emojis
-        self.remove_punctuation = remove_punctuation
-        self.convert_lowercase = convert_lowercase
-        self.remove_stopwords = remove_stopwords
-        self.lemmatize = lemmatize
-        self.language = language
-        
-        # Compile regex patterns
-        self.url_pattern = re.compile(r'https?://\S+|www\.\S+')
-        self.mention_pattern = re.compile(r'@\w+')
-        self.hashtag_pattern = re.compile(r'#(\w+)')
-        
-        # Initialize lemmatizer if needed
-        if self.lemmatize:
-            self.lemmatizer = WordNetLemmatizer()
-        
-        # Load stopwords if needed
-        if self.remove_stopwords:
-            self.stop_words = set(stopwords.words(self.language))
+
+def clean_text(text):
+    """
+    Clean text by removing special characters, links, and extra whitespace.
     
-    def process_text(self, text):
-        #Process a text string according to the configured options.
-        #Args:
-          #text (str): The input text to process
-          
-        if not isinstance(text, str) or text == '':
-            return ''
+    Args:
+        text (str): Input text to clean
         
-        # Handle URLs
-        if self.remove_urls:
-            text = self.url_pattern.sub('', text)
+    Returns:
+        str: Cleaned text
+    """
+    if not isinstance(text, str):
+        return ""
+    
+    # Convert to lowercase
+    text = text.lower()
+    
+    # Remove URLs
+    text = re.sub(r'http\S+', '', text)
+    
+    # Remove special characters and numbers, keeping only letters and spaces
+    text = re.sub(r'[^a-zA-Z\s]', '', text)
+    
+    # Remove extra whitespace
+    text = re.sub(r'\s+', ' ', text).strip()
+    
+    return text
+
+
+def remove_stopwords(text):
+    """
+    Remove stopwords from text.
+    
+    Args:
+        text (str): Input text
         
-        # Handle mentions
-        if self.remove_mentions:
-            text = self.mention_pattern.sub('', text)
-        else:
-            # Replace @username with @USER to anonymize but keep the mention indicator
-            text = self.mention_pattern.sub('@USER', text)
+    Returns:
+        str: Text with stopwords removed
+    """
+    stop_words = set(stopwords.words('english'))
+    word_tokens = word_tokenize(text)
+    filtered_text = [word for word in word_tokens if word.lower() not in stop_words]
+    return ' '.join(filtered_text)
+
+
+def process_sst_dataset():
+    """
+    Process the Stanford Sentiment Treebank dataset.
+    
+    Returns:
+        tuple: (train_data, val_data, test_data) as pandas DataFrames
+    """
+    logger.info("Processing Stanford Sentiment Treebank dataset...")
+    
+    try:
+        # Load SST dataset
+        df = pd.read_csv(SST_FILE)
+        logger.info(f"Loaded {len(df)} rows from SST dataset")
         
-        # Handle hashtags
-        if self.process_hashtags:
-            # Extract the text from hashtags and keep it
-            text = self.hashtag_pattern.sub(r'\1', text)
+        # Basic info about the dataset
+        logger.info(f"Dataset columns: {df.columns.tolist()}")
+        logger.info(f"Label distribution: {df['labels'].value_counts().to_dict()}")
         
-        # Handle emojis
-        if self.process_emojis:
-            text = self.replace_emojis(text)
-        
-        # Convert to lowercase
-        if self.convert_lowercase:
-            text = text.lower()
-        
-        # Tokenize
-        tokens = word_tokenize(text)
-        
-        # Remove punctuation
-        if self.remove_punctuation:
-            tokens = [token for token in tokens if token not in string.punctuation]
+        # Clean text
+        logger.info("Cleaning text...")
+        df['cleaned_text'] = df['text'].apply(clean_text)
         
         # Remove stopwords
-        if self.remove_stopwords:
-            tokens = [token for token in tokens if token not in self.stop_words]
+        logger.info("Removing stopwords...")
+        df['processed_text'] = df['cleaned_text'].apply(remove_stopwords)
         
-        # Lemmatize
-        if self.lemmatize:
-            tokens = [self.lemmatizer.lemmatize(token) for token in tokens]
+        # Drop rows with empty text after processing
+        df = df.dropna(subset=['processed_text'])
+        df = df[df['processed_text'].str.strip() != '']
+        logger.info(f"{len(df)} rows after cleaning")
         
-        # Join tokens back into a string
-        return ' '.join(tokens)
-    
-    def replace_emojis(self, text):
-      
-      # Replace emojis with their text description or remove them.
-      # Args:
-      # text (str): Input text with emojis
-      # Returns:
-      # str: Text with emojis replaced by their description
-
-        return emoji.demojize(text).replace(':', ' ').replace('_', ' ')
-    
-    def segment_hashtag(self, hashtag):
-      
-       # Split hashtag into separate words using simple heuristics.
+        # Split the data
+        train_df, temp_df = train_test_split(df, test_size=0.3, random_state=42, stratify=df['labels'])
+        val_df, test_df = train_test_split(temp_df, test_size=0.5, random_state=42, stratify=temp_df['labels'])
         
-       # Args:
-       #     hashtag (str): The hashtag text without the # symbol
-            
-       # Returns:
-       #     str: Space-separated words from the hashtag
-
-        # Method 1: Split by capital letters
-        words = re.findall(r'[A-Z]?[a-z]+|[A-Z]+', hashtag)
-        if len(words) > 1:
-            return ' '.join(words).lower()
-    
-        return hashtag
-
-
-def preprocess_dataset(texts, config=None):
-    
-   # Preprocess a list of texts with optional custom configuration.
-    
-   # Args:
-   #     texts (list): List of text strings to process
-   #     config (dict, optional): Configuration parameters for the TextPreprocessor
+        logger.info(f"Split sizes: Train={len(train_df)}, Val={len(val_df)}, Test={len(test_df)}")
         
-   # Returns:
-   #     list: List of preprocessed text strings
-
-    # Use default configuration if none provided
-    if config is None:
-        preprocessor = TextPreprocessor()
-    else:
-        preprocessor = TextPreprocessor(**config)
-    
-    return [preprocessor.process_text(text) for text in texts]
-
-
-def load_and_preprocess_data(file_path, text_column, config=None):
-  
-   # Load data from a CSV file and preprocess the text column.
-    
-   # Args:
-   #     file_path (str): Path to the CSV file
-   #     text_column (str): Name of the column containing text to preprocess
-   #     config (dict, optional): Configuration parameters for the TextPreprocessor
+        # Save processed data
+        train_df.to_csv(PROCESSED_DATA_DIR / "sst_train.csv", index=False)
+        val_df.to_csv(PROCESSED_DATA_DIR / "sst_val.csv", index=False)
+        test_df.to_csv(PROCESSED_DATA_DIR / "sst_test.csv", index=False)
         
-   # Returns:
-   #     pandas.DataFrame: DataFrame with preprocessed text
+        return train_df, val_df, test_df
+    
+    except Exception as e:
+        logger.error(f"Error processing SST dataset: {e}")
+        raise
 
+
+def process_reddit_data():
+    """
+    Process the Reddit dataset in CSV format.
+    
+    Returns:
+        tuple: (train_data, val_data, test_data) as pandas DataFrames
+    """
+    logger.info("Processing Reddit dataset...")
+    
     try:
-        import pandas as pd
-        df = pd.read_csv(file_path)
+        # Check if reddit data file exists
+        if not REDDIT_FILE.exists():
+            logger.error(f"Reddit data file not found: {REDDIT_FILE}")
+            return None, None, None
         
-        if text_column not in df.columns:
-            raise ValueError(f"Column '{text_column}' not found in the dataset")
+        # Load Reddit dataset
+        df = pd.read_csv(REDDIT_FILE)
+        logger.info(f"Loaded {len(df)} rows from Reddit dataset")
+        logger.info(f"Loaded {len(df)} rows from Reddit dataset")
         
-        preprocessor = TextPreprocessor(**(config or {}))
-        df['processed_text'] = df[text_column].apply(preprocessor.process_text)
+        # Clean text
+        logger.info("Cleaning text...")
+        df['cleaned_text'] = df['text'].apply(clean_text)
         
-        return df
+        # Remove stopwords
+        logger.info("Removing stopwords...")
+        df['processed_text'] = df['cleaned_text'].apply(remove_stopwords)
+        
+        # Drop rows with empty text after processing
+        df = df.dropna(subset=['processed_text'])
+        df = df[df['processed_text'].str.strip() != '']
+        logger.info(f"{len(df)} rows after cleaning")
+        
+        # Split the data
+        train_df, temp_df = train_test_split(df, test_size=0.3, random_state=42, stratify=df['labels'])
+        val_df, test_df = train_test_split(temp_df, test_size=0.5, random_state=42, stratify=temp_df['labels'])
+        
+        logger.info(f"Split sizes: Train={len(train_df)}, Val={len(val_df)}, Test={len(test_df)}")
+        
+        # Save processed data
+        train_df.to_csv(PROCESSED_DATA_DIR / "reddit_train.csv", index=False)
+        val_df.to_csv(PROCESSED_DATA_DIR / "reddit_val.csv", index=False)
+        test_df.to_csv(PROCESSED_DATA_DIR / "reddit_test.csv", index=False)
+        
+        return train_df, val_df, test_df
     
-    except ImportError:
-        print("Pandas is required to load CSV files. Please install it with 'pip install pandas'")
-        return None
+    except Exception as e:
+        logger.error(f"Error processing Reddit dataset: {e}")
+        raise
 
 
-if __name__ == "__main__"
-      # Example usage
-      example_texts = [
-          "I absolutely LOVE this product! It's amazing! 😍 #recommended #mustBuy",
-          "@user This is disappointing... https://example.com/complaint 😡",
-          "The weather is so-so today. Not great, not terrible. #WeatherUpdate",
-          "RT @news: Breaking: Important announcement coming! Stay tuned! #BigNews"
-      ] 
-      
-      # Default configuration
-      preprocessed_texts = preprocess_dataset(example_texts)
-      
-      print("Original texts:")
-      for text in example_texts:
-          print(f"  - {text}")
-      
-      print("\nPreprocessed texts (default config):")
-      for text in preprocessed_texts:
-          print(f"  - {text}")
-      
-      # Custom configuration
-      custom_config = {
-          'remove_urls': True,
-          'remove_mentions': True,
-          'process_hashtags': True,
-          'process_emojis': True,
-          'remove_punctuation': True,
-          'convert_lowercase': True,
-          'remove_stopwords': True,
-          'lemmatize': True
-      }
-      
-      preprocessed_texts_custom = preprocess_dataset(example_texts, custom_config)
-      
-      print("\nPreprocessed texts (custom config with stopword removal and lemmatization):")
-      for text in preprocessed_texts_custom:  
-          print(f"  - {text}")
+def combine_datasets(sst_data, reddit_data):
+    """
+    Combine SST and Reddit datasets.
+    
+    Args:
+        sst_data (tuple): (train, val, test) DataFrames for SST
+        reddit_data (tuple): (train, val, test) DataFrames for Reddit
+        
+    Returns:
+        tuple: Combined (train, val, test) DataFrames
+    """
+    logger.info("Combining datasets...")
+    
+    combined_data = []
+    
+    for i, (sst_df, reddit_df) in enumerate(zip(sst_data, reddit_data)):
+        if sst_df is not None and reddit_df is not None:
+            # Add source column to identify the origin
+            sst_df = sst_df.copy()
+            reddit_df = reddit_df.copy()
+            
+            sst_df['source'] = 'sst'
+            reddit_df['source'] = 'reddit'
+            
+            # Combine
+            combined_df = pd.concat([sst_df, reddit_df], ignore_index=True)
+            
+            # Save
+            split_name = ['train', 'val', 'test'][i]
+            combined_df.to_csv(PROCESSED_DATA_DIR / f"combined_{split_name}.csv", index=False)
+            
+            combined_data.append(combined_df)
+        else:
+            combined_data.append(None)
+    
+    return tuple(combined_data)
+
+
+def save_dataset_stats(train_df, val_df, test_df, dataset_name):
+    """
+    Save statistics about the dataset splits.
+    
+    Args:
+        train_df, val_df, test_df: DataFrames for each split
+        dataset_name: Name of the dataset
+    """
+    stats = {
+        'dataset': dataset_name,
+        'total_samples': len(train_df) + len(val_df) + len(test_df),
+        'train_samples': len(train_df),
+        'val_samples': len(val_df),
+        'test_samples': len(test_df),
+        'label_distribution': {
+            'train': train_df['labels'].value_counts().to_dict(),
+            'val': val_df['labels'].value_counts().to_dict(),
+            'test': test_df['labels'].value_counts().to_dict()
+        },
+        'avg_text_length': {
+            'train': train_df['processed_text'].str.len().mean(),
+            'val': val_df['processed_text'].str.len().mean(),
+            'test': test_df['processed_text'].str.len().mean()
+        }
+    }
+    
+    with open(PROCESSED_DATA_DIR / f"{dataset_name}_stats.json", 'w') as f:
+        json.dump(stats, f, indent=2)
+    
+    logger.info(f"Saved stats for {dataset_name} dataset")
+
+
+def main():
+    """Main function to run data preprocessing."""
+    logger.info("Starting data preprocessing")
+    
+    # Download NLTK resources
+    download_nltk_resources()
+    
+    # Process SST dataset
+    sst_data = process_sst_dataset()
+    if all(sst_data):
+        save_dataset_stats(*sst_data, 'sst')
+    
+    # Process Reddit dataset
+    reddit_data = process_reddit_data()
+    if all(reddit_data):
+        save_dataset_stats(*reddit_data, 'reddit')
+    
+    # Combine datasets if both are available
+    if all(sst_data) and all(reddit_data):
+        combined_data = combine_datasets(sst_data, reddit_data)
+        if all(combined_data):
+            save_dataset_stats(*combined_data, 'combined')
+    
+    logger.info("Data preprocessing completed")
+
+
+if __name__ == "__main__":
+    main()
