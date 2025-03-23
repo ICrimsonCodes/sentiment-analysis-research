@@ -1,4 +1,5 @@
 # requirements.txt
+seaborn
 transformers==4.35.0
 torch==2.0.1
 datasets==2.14.0
